@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 import streamlit.components.v1 as components
 from html import escape
 
-from database.connection import get_connection
+from database.connection import get_connection, is_cloud_database
 from api.crickbuzz_client import CrickbuzzClient
 
 try:
@@ -1740,10 +1740,32 @@ button[data-baseweb="tab"][aria-selected="true"]{color:#b778ff!important;}
     def page_heading(kicker, title, accent, subtitle):
         st.markdown(f'<div class="dash-kicker">{escape(kicker)}</div><div class="dash-title">{escape(title)} <span>{escape(accent)}</span></div><div class="dash-sub">{escape(subtitle)}</div>', unsafe_allow_html=True)
 
+    def _cloud_sql(query):
+        """Translate the small T-SQL subset used by this app to SQLite on Streamlit Cloud."""
+        q = str(query).strip()
+        top_match = re.search(r"(?is)^\s*SELECT\s+TOP\s+(\d+)\s+", q)
+        limit = None
+        if top_match:
+            limit = int(top_match.group(1))
+            q = re.sub(r"(?is)^\s*SELECT\s+TOP\s+\d+\s+", "SELECT ", q, count=1)
+
+        # SQLite accepts most of the remaining queries. Normalize SQL Server-only pieces.
+        q = re.sub(r"(?i)GETDATE\(\)", "CURRENT_TIMESTAMP", q)
+        q = re.sub(
+            r"(?i)CAST\(([^()]+)\s+AS\s+DATE\)",
+            r"date(\1)",
+            q,
+        )
+
+        if limit is not None:
+            q = q.rstrip().rstrip(";") + f" LIMIT {limit};"
+        return q
+
     def read_sql(query, params=None):
         conn = get_connection()
         try:
-            return pd.read_sql_query(query, conn, params=params)
+            sql = _cloud_sql(query) if is_cloud_database() else query
+            return pd.read_sql_query(sql, conn, params=params)
         finally:
             conn.close()
 
@@ -2003,7 +2025,27 @@ button[data-baseweb="tab"][aria-selected="true"]{color:#b778ff!important;}
             return "Database summary is currently unavailable."
 
     def ask_general_ai(question):
-        """Use the free local Ollama model for general/cricket questions."""
+        """Use Ollama locally; database/fixed assistant intents remain available on cloud."""
+        if is_cloud_database():
+            q = normalize_ai_question(question)
+            offline_answers = {
+                "what is lbw in cricket": (
+                    "LBW means **Leg Before Wicket**. A batter can be out LBW when a legal delivery "
+                    "hits the batter's body before the bat and, under the Laws of Cricket, the ball "
+                    "would otherwise have gone on to hit the stumps, subject to the pitching and "
+                    "impact conditions."
+                ),
+                "what is lbw": (
+                    "LBW means **Leg Before Wicket**. It is a mode of dismissal where the ball hits "
+                    "the batter's body and the umpire judges that the delivery satisfies the LBW conditions."
+                ),
+            }
+            if q in offline_answers:
+                return offline_answers[q]
+            return (
+                "The public demo can answer the supported **database analytics questions** shown in "
+                "Top 7 Questions. The full local version also uses Ollama for unrestricted general AI."
+            )
         try:
             history = st.session_state.get("ai_messages", [])[-6:]
             history_text = "\n".join(
@@ -3147,7 +3189,7 @@ button[data-baseweb="tab"][aria-selected="true"]{color:#b778ff!important;}
                                     batting_style=?,
                                     bowling_style=?,
                                     country=?,
-                                    updated_at=GETDATE()
+                                    updated_at=CURRENT_TIMESTAMP
                                 WHERE player_id=?
                                 """,
                                 update_name.strip(),
