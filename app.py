@@ -2025,68 +2025,67 @@ button[data-baseweb="tab"][aria-selected="true"]{color:#b778ff!important;}
             return "Database summary is currently unavailable."
 
     def ask_general_ai(question):
-        """Use Ollama locally; database/fixed assistant intents remain available on cloud."""
+        """Use Ollama locally and Groq on Streamlit Cloud."""
+        system_prompt = (
+            "You are Cricbuzz AI, a concise and helpful cricket intelligence assistant. "
+            "Answer cricket questions accurately and clearly. You may also answer normal "
+            "general-knowledge questions. Do not invent database statistics."
+        )
+
         if is_cloud_database():
-            q = normalize_ai_question(question)
-            offline_answers = {
-                "what is lbw in cricket": (
-                    "LBW means **Leg Before Wicket**. A batter can be out LBW when a legal delivery "
-                    "hits the batter's body before the bat and, under the Laws of Cricket, the ball "
-                    "would otherwise have gone on to hit the stumps, subject to the pitching and "
-                    "impact conditions."
-                ),
-                "what is lbw": (
-                    "LBW means **Leg Before Wicket**. It is a mode of dismissal where the ball hits "
-                    "the batter's body and the umpire judges that the delivery satisfies the LBW conditions."
-                ),
-            }
-            if q in offline_answers:
-                return offline_answers[q]
-            return (
-                "The public demo can answer the supported **database analytics questions** shown in "
-                "Top 7 Questions. The full local version also uses Ollama for unrestricted general AI."
-            )
+            try:
+                groq_key = st.secrets.get("GROQ_API_KEY", "")
+            except Exception:
+                groq_key = ""
+            if not groq_key:
+                return "Cloud AI is not configured yet. Add GROQ_API_KEY to Streamlit Secrets."
+            try:
+                response = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": "llama-3.3-70b-versatile",
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": str(question)},
+                        ],
+                        "temperature": 0.35,
+                        "max_tokens": 700,
+                    },
+                    timeout=60,
+                )
+                if response.status_code == 429:
+                    return "Groq free-tier rate limit reached temporarily. Please try again shortly."
+                response.raise_for_status()
+                data = response.json()
+                return data["choices"][0]["message"]["content"].strip()
+            except requests.RequestException as error:
+                return f"Cloud AI is temporarily unavailable: {error}"
+            except (KeyError, IndexError, TypeError, ValueError):
+                return "Cloud AI returned an unexpected response. Please try again."
+
         try:
-            history = st.session_state.get("ai_messages", [])[-6:]
-            history_text = "\n".join(
-                f"{m.get('role','user').upper()}: {m.get('content','')}"
-                for m in history
-                if m.get("content")
-            )
-            system_prompt = (
-                "You are Cricbuzz AI, a concise, intelligent assistant inside a cricket analytics dashboard. "
-                "Answer cricket questions and normal general-knowledge questions naturally. "
-                "The user may write English, Hindi, or Hinglish; reply in the same style when practical. "
-                "Never invent values from the user's SQL database. If a database-specific value is not present "
-                "in the supplied database context, say that it is not available from the current context. "
-                "Keep answers presentation-friendly and usually under 180 words."
-            )
-            user_prompt = (
-                f"{get_ai_database_context()}\n\n"
-                f"Recent conversation:\n{history_text}\n\n"
-                f"Current user question: {question}"
-            )
             response = requests.post(
                 "http://localhost:11434/api/chat",
                 json={
                     "model": os.getenv("OLLAMA_MODEL", "llama3.2:3b"),
                     "messages": [
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
+                        {"role": "user", "content": str(question)},
                     ],
                     "stream": False,
                 },
                 timeout=120,
             )
             response.raise_for_status()
-            answer = response.json().get("message", {}).get("content", "").strip()
-            return answer or "I could not generate a response right now."
-        except requests.exceptions.ConnectionError:
-            return "Local AI is offline. Please start Ollama, then try again."
-        except Exception as error:
-            return f"Local AI error: {error}"
+            data = response.json()
+            return data.get("message", {}).get("content", "").strip() or "The local AI returned an empty response."
+        except requests.RequestException as error:
+            return f"The local Ollama AI is unavailable. Make sure Ollama is running. ({error})"
+        except (KeyError, TypeError, ValueError):
+            return "The local AI returned an unexpected response. Please try again."
 
-    @st.cache_resource(show_spinner=False)
+
     def get_whisper_model():
         from faster_whisper import WhisperModel
         return WhisperModel(
