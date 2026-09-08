@@ -5,6 +5,7 @@ import os
 import re
 import tempfile
 import requests
+from groq import Groq
 
 import streamlit as st
 import pandas as pd
@@ -2025,11 +2026,12 @@ button[data-baseweb="tab"][aria-selected="true"]{color:#b778ff!important;}
             return "Database summary is currently unavailable."
 
     def ask_general_ai(question):
-        """Use Ollama locally and Groq on Streamlit Cloud."""
+        """Use Ollama locally and Groq SDK on Streamlit Cloud."""
         system_prompt = (
             "You are Cricbuzz AI, a concise and helpful cricket intelligence assistant. "
             "Answer cricket questions accurately and clearly. You may also answer normal "
-            "general-knowledge questions. Do not invent database statistics."
+            "general-knowledge questions. Do not invent database statistics; database-specific "
+            "questions are handled separately by the application."
         )
 
         if is_cloud_database():
@@ -2037,32 +2039,29 @@ button[data-baseweb="tab"][aria-selected="true"]{color:#b778ff!important;}
                 groq_key = st.secrets.get("GROQ_API_KEY", "")
             except Exception:
                 groq_key = ""
+
             if not groq_key:
                 return "Cloud AI is not configured yet. Add GROQ_API_KEY to Streamlit Secrets."
+
             try:
-                response = requests.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                    json={
-                        "model": "llama-3.3-70b-versatile",
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": str(question)},
-                        ],
-                        "temperature": 0.35,
-                        "max_tokens": 700,
-                    },
-                    timeout=60,
+                client = Groq(api_key=groq_key)
+                completion = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": str(question)},
+                    ],
+                    temperature=0.35,
+                    max_tokens=700,
                 )
-                if response.status_code == 429:
+                answer = completion.choices[0].message.content
+                return (answer or "").strip() or "Cloud AI returned an empty response."
+
+            except Exception as error:
+                message = str(error)
+                if "429" in message or "rate limit" in message.lower():
                     return "Groq free-tier rate limit reached temporarily. Please try again shortly."
-                response.raise_for_status()
-                data = response.json()
-                return data["choices"][0]["message"]["content"].strip()
-            except requests.RequestException as error:
-                return f"Cloud AI is temporarily unavailable: {error}"
-            except (KeyError, IndexError, TypeError, ValueError):
-                return "Cloud AI returned an unexpected response. Please try again."
+                return f"Cloud AI is temporarily unavailable: {message}"
 
         try:
             response = requests.post(
@@ -2079,7 +2078,9 @@ button[data-baseweb="tab"][aria-selected="true"]{color:#b778ff!important;}
             )
             response.raise_for_status()
             data = response.json()
-            return data.get("message", {}).get("content", "").strip() or "The local AI returned an empty response."
+            return data.get("message", {}).get("content", "").strip() or (
+                "The local AI returned an empty response."
+            )
         except requests.RequestException as error:
             return f"The local Ollama AI is unavailable. Make sure Ollama is running. ({error})"
         except (KeyError, TypeError, ValueError):

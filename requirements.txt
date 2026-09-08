@@ -8,3 +8,4 @@ pyodbc
 plotly
 faster-whisper
 streamlit-mic-recorder
+groq
