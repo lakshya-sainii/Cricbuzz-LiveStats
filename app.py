@@ -2046,7 +2046,7 @@ button[data-baseweb="tab"][aria-selected="true"]{color:#b778ff!important;}
             try:
                 client = Groq(api_key=groq_key)
                 completion = client.chat.completions.create(
-                    model="llama-3.1-8b-instant",
+                    model="openai/gpt-oss-20b",
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": str(question)},
